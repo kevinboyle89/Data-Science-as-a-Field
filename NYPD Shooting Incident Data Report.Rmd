@@ -1,0 +1,185 @@
+---
+title: "NYPD Shooting Incident Data Report"
+author: "Kevin Boyle"
+date: "2023-01-23"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+shooting_data <- read_csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+```
+
+## Overview
+
+By analyzing the NYPD Shooting Incident data set, I am able to clearly see where the top 10 precincts were with the most shootings over the past decade, how those shootings trended over that decade with each precinct, as well as the percentage that resulted in murder. From there, I can create a linear model which can predict how many murders will result in these high incident districts in the hopes of predicting subsequent years.
+
+## Summary of Data
+
+At first, here is an initial summary of the subset of data I will be using:
+
+```{r shooting, echo=TRUE}
+df <- data.frame(c(shooting_data['INCIDENT_KEY'], 
+                 shooting_data["OCCUR_DATE"],
+                 shooting_data["BORO"],
+                 shooting_data["PRECINCT"],
+                 shooting_data["STATISTICAL_MURDER_FLAG"]))
+
+df <- mutate(df, "OCCUR_DATE" = as.Date(df$OCCUR_DATE, format = "%m/%d/%Y"))
+
+summary(df)
+
+```
+
+I had to convert OCCUR_DATE in the original data set to a date field as well as I removed some columns from the original dataset that I do not think are necessary for this analysis. For example, columns that deal with the perpetrator's and/or victim's race or sex were considered unnecessary for what I was trying to analyze, so I did not include them in this report.
+
+## Analysis of Data
+
+Next, I would like to group the total number of shootings in each year in the 2010s per precinct, in order to determine what the top 10 precincts are in terms of overall occurrence of shootings:
+
+```{r 2010s data sorted by prevalence of shootings, echo=TRUE}
+df_2010 <- filter(df, (OCCUR_DATE >= "2010-01-01") & (OCCUR_DATE <= "2019-12-31"))
+df_grp_precinct <- tally(group_by(df_2010, PRECINCT))
+
+arrange(df_grp_precinct,desc(n))
+
+```
+
+From there, we can determine the trends of these top 10 precincts where shootings are the most prevalent. 
+
+## Visualization of Data
+
+Starting in 2010, and going all the way to 2019, we can include data of shootings for each year, and create a graph showing the trend for each precinct (each color line is a different precinct):
+
+```{r 2010s trends for the top 10 precincts,echo=TRUE}
+df_2010s_by_precincts <- data.frame(matrix(ncol=4, nrow=0))
+colnames(df_2010s_by_precincts) <- c('year','precinct','shootings','murders')
+
+
+top_10_precincts <- list("75", "73", "67", "44", "46", "79", "47", "40", "42", "81")
+my_range <- 1:10
+for (x in top_10_precincts) {
+  for (y in my_range) {
+    start_date <- paste(2009 + y, "01","01", sep = "/")
+    end_date <- paste(2009 + y, "12", "31", sep = "/")
+    df_2010s_by_precincts[nrow(df_2010s_by_precincts) + 1,] <- c(2009 + y, 
+                                                                 x, 
+                                                                 nrow(filter(df, PRECINCT == x & (OCCUR_DATE >= start_date) & (OCCUR_DATE <= end_date))), 
+                                                                 nrow(filter(df, PRECINCT == x & (OCCUR_DATE >= start_date) & (OCCUR_DATE <= end_date) & STATISTICAL_MURDER_FLAG == TRUE)))
+  }
+}
+
+df_2010s_by_precincts$shootings <- as.numeric(df_2010s_by_precincts$shootings)
+df_2010s_by_precincts$murders <- as.numeric(df_2010s_by_precincts$murders)
+df_2010s_by_precincts$year <- as.numeric(df_2010s_by_precincts$year)
+df_2010s_by_precincts$precinct <- as.character(df_2010s_by_precincts$precinct)
+
+head(df_2010s_by_precincts, n=10)
+
+```
+
+In this table, you can see a subset of the filtered data showing how many total shootings and murders are by precinct, and by year. There are 100 total rows in this table, as there are 10 years worth of data for 10 different precincts.
+
+```{r graph_of_shootings, echo = TRUE}
+
+df_2010s_by_precincts %>%
+  ggplot(aes(x = year, y = shootings, color = precinct)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(2010, 2019, by = 1)) +
+  labs(title = "Number of Shootings in NYC By Precinct During the 2010s",
+       subtitle = "How do Shootings differ by Precinct over Time?",
+       x = "Year (2010-2019)",
+       y = "# of Shootings",
+       color = "Precinct #") 
+  
+```
+
+The graph clearly shows that among the top 10 precincts in shootings overall, there was an obvious downward trend throughout the decade so that, by the end of the 2010s, there was an overall decrease in shootings.
+
+Now, I am going to visualize the amount of murders in a very similar way:
+
+```{r graph_of_murders, echo = TRUE}
+
+df_2010s_by_precincts %>%
+  ggplot(aes(x = year, y = murders, color = precinct)) +
+  geom_line() +
+  scale_x_continuous(breaks = seq(2010, 2019, by = 1)) +
+  labs(title = "Number of Murders in NYC By Precinct During the 2010s",
+       subtitle = "How do Murders differ by Precinct over Time?",
+       x = "Year (2010-2019)",
+       y = "# of Murders",
+       color = "Precinct #") 
+```
+
+Similarly, there is a downward trend of murders throughout the decade, which leads me to believe that there is a linear trend between murders and shootings (as in, the more shootings in these high incident precincts, the more murders, and vice versa). 
+
+## Data Model
+
+Using this trend, we can create a linear model based on the data gathered during the 2010s: 
+
+```{r linear model for predicting over time, echo = TRUE}
+  mod <- lm(murders ~ shootings, data = df_2010s_by_precincts)
+  summary(mod)
+
+```
+
+Using this linear model, we can do a side by side comparison with some of the murder numbers in the 2010s versus what this model would have predicted the murders to be in that precinct in that year:
+
+```{r sidebyside, echo = TRUE}
+    
+  df_2010s_by_precincts %>% mutate(pred = predict(mod))
+
+```
+
+Visually, we can take one of the precincts (in this case, Precinct 75, which had the highest amount of shootings in NYC over the 2010s), and create a graph that compares the actual decade's murders in the precinct versus the predicted murders based on the linear model.
+
+```{r graph_of_model_75, echo = TRUE}
+
+df_2010s_by_precincts %>%
+  mutate(pred = predict(mod)) %>%
+  filter(precinct == 75) %>%
+  ggplot() +
+  geom_line(aes(x = year, y = murders, color = "Actual")) +
+  geom_line(aes(x = year, y = pred, color = "Prediction")) +    
+  scale_x_continuous(breaks = seq(2010, 2019, by = 1)) +
+  labs(title = "Number of Murders in NYC in Precinct 75 During the 2010s",
+       subtitle = "How do Murders differ by Precinct over Time?",
+       x = "Year (2010-2019)",
+       y = "# of Murders",
+       color = "Precinct #") 
+```
+
+Using this one example, we can see that the linear model holds, and that it is clear there is a direct correlation to how many shootings and how many murders there are within precinct, given that it is a precinct with a large amount of shootings relative to the rest of NYC. Just to show it is not a fluke, we will take one more example at random, which is Precinct 40 (still one of the top 10 precincts).
+
+```{r graph_of_model_40, echo = TRUE}
+
+df_2010s_by_precincts %>%
+  mutate(pred = predict(mod)) %>%
+  filter(precinct == 40) %>%
+  ggplot() +
+  geom_line(aes(x = year, y = murders, color = "Actual")) +
+  geom_line(aes(x = year, y = pred, color = "Prediction")) +    
+  scale_x_continuous(breaks = seq(2010, 2019, by = 1)) +
+  labs(title = "Number of Murders in NYC in Precinct 40 During the 2010s",
+       subtitle = "How do Murders differ by Precinct over Time?",
+       x = "Year (2010-2019)",
+       y = "# of Murders",
+       color = "Precinct #") 
+```
+
+## Conclusions
+
+Within this report, I have analyzed the data based on number of shootings and murders per precinct, and based on the 10 highest shooting precincts in NYC over the 2010s, I was able to draw a few conclusions. First, there is a downward trend over the 2010s that shows shootings have decreased in NYC in high-shooting precincts during the decade. 
+
+Secondly, there seems to be a direct, linear correlation between shootings and murders in these precincts. Using a linear model between shootings and murders, I was able to create a prediction in how murders will trend over a few of the high-shooting districts, and those predictions lined up pretty well with the actual murders.
+
+### Note on Bias
+
+As with any crime statistics, there may be some implicit (or explicit) bias. Removing race and sex and not focusing on either perpetrators or victims for analysis, I hoped to reduce as much racial, socioeconomic, or gender bias in the analysis that interested me. I am also aware that while murders lined up in a linear fashion to shootings in high-shooting areas, this may not be the case in precincts where shootings are low. In those precincts and neighborhoods, there may be a different percentage overall. I tried to make clear during my report that the correlation and linear model was predictive of high-shooting precincts only.
+
+
+
