@@ -1,0 +1,175 @@
+---
+title: "Johns Hopkins COVID Data Project"
+author: "Kevin Boyle"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Overview
+
+By analyzing the Johns Hopkins COVID data set, I hope to first identify confirmed cases in the US, as well as deaths in the US, over the course of the pandemic. I then hope to identify those same variables (cases and deaths) over time globally. From there, I hope to compare both sets of data, and then determine whether the data in the US trends in the same way as the data around the globe. If so, I can create a linear model which can predict how many deaths will occur in the US given the actual global numbers we have, to try to draw the conclusion that global death numbers are predictors of US death numbers.
+
+# Setup
+
+First, I will import the necessary libraries and read the data I need from Johns Hopkins which will help us throughout the report.
+
+```{r setup, include=TRUE}
+
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+us_confirm <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv")
+global_confirm <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv")
+us_death <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv")
+global_death <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv")
+
+```
+
+# Anaylsis of Data
+
+To first analyze the data sets, I will pivot on the original US confirmed and death data sets to get confirmed cases and deaths over time (daily totals), and then join those into one table: us_combined. Because cases and deaths are total, cumulative amounts from the beginning of the pandemic, I created new variables (daily_us_cases and daily_us_deaths) which are lagging variables that show how many cases and deaths there are on a specific day.
+
+```{r extracting_us_data, include=TRUE}
+
+us_cases <- us_confirm %>%
+ pivot_longer(cols = -c('Province_State', 'Country_Region', Lat, Long_,UID,iso2,iso3,code3,FIPS,Admin2,Combined_Key),
+              names_to = 'date',
+              values_to = 'us_cases') %>%
+ mutate(date = mdy(date)) %>%
+ select(-c(Lat,Long_,UID,iso2,iso3,code3,FIPS,Admin2,Combined_Key))
+
+us_total_by_day <- us_cases %>%
+  group_by(date) %>%
+  summarize(us_cases = sum(us_cases)) %>%
+  mutate(daily_us_cases=us_cases-lag(us_cases))
+
+us_deaths <- us_death %>%
+ pivot_longer(cols = -c('Province_State', 'Country_Region', Lat, Long_,UID,iso2,iso3,code3,FIPS,Admin2,Combined_Key,Population),
+              names_to = 'date',
+              values_to = 'us_deaths') %>%
+ mutate(date = mdy(date)) %>%
+ select(-c(Lat,Long_,UID,iso2,iso3,code3,FIPS,Admin2,Combined_Key,Population))
+
+us_death_by_day <- us_deaths %>%
+  group_by(date) %>%
+  summarize(us_deaths = sum(us_deaths)) %>%
+  mutate(daily_us_deaths=us_deaths-lag(us_deaths))
+
+ us_combined <- full_join(us_total_by_day, us_death_by_day) 
+ 
+```
+
+Now I will do the same for global data!
+
+```{r extracting_global_data, include=TRUE}
+
+global_cases <- global_confirm %>%
+ pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+              names_to = 'date',
+              values_to = 'g_cases') %>%
+ mutate(date = mdy(date)) %>%
+ select(-c(Lat,Long))
+
+global_total_by_day <- global_cases %>%
+  group_by(date) %>%
+  summarize(g_cases = sum(g_cases)) %>%
+  mutate(daily_g_cases=g_cases-lag(g_cases))
+
+global_deaths <- global_death %>%
+ pivot_longer(cols = -c('Province/State', 'Country/Region', Lat, Long),
+              names_to = 'date',
+              values_to = 'g_deaths') %>%
+ mutate(date = mdy(date)) %>%
+ select(-c(Lat,Long))
+
+global_death_by_day <- global_deaths %>%
+  group_by(date) %>%
+  summarize(g_deaths = sum(g_deaths)) %>%
+  mutate(daily_g_deaths=g_deaths-lag(g_deaths))
+
+ global_combined <- full_join(global_total_by_day, global_death_by_day)
+
+```
+
+Now I will combine the US and Global cases and deaths tables, joining by date. This will create a new table called total_combined.
+
+```{r join_us_and_global, include=TRUE}
+
+total_combined <- full_join(us_combined, global_combined)
+total_combined <- replace(total_combined, is.na(total_combined), 0)
+tail(total_combined)
+
+```
+
+# Visualization of Data
+
+Now that I have one table with daily amounts of cases and deaths both within the US and around the globe, I can do some visualizations to compare this data.
+
+At first, I want to create a graph that overlays the cases in the US with the cases globally.
+
+```{r graph_of_cases, echo = TRUE}
+
+total_combined %>%
+  ggplot() +
+  geom_line(aes(x = date, y = daily_us_cases, color = 'US Cases')) +
+  geom_line(aes(x = date, y = daily_g_cases, color = 'Global Cases')) +
+  labs(title = "Number of Daily Cases in the US vs. Globally",
+       x = "Date",
+       y = "Daily Amount") 
+  
+```
+
+Now, I will create a similar table, this time with US vs. Global deaths.
+
+```{r graph_of_deaths, echo = TRUE}
+
+total_combined %>%
+  ggplot() +
+  geom_line(aes(x = date, y = daily_us_deaths, color = 'US Deaths')) +
+  geom_line(aes(x = date, y = daily_g_deaths, color = 'Global Deaths')) +
+  labs(title = "Number of Daily Deaths in the US vs. Globally",
+       x = "Date",
+       y = "Daily Amount") 
+  
+```
+
+# Linear Model Predicting US Deaths Given Global Deaths in Year 2022
+
+Since deaths and cases globally seem to trend in similar directions as deaths and cases in the US, I will now create a linear model to predict US deaths given that we know global deaths. I will then create a visualization that compares the prediction with the actual, over the year 2022.
+
+```{r linear_model, echo = TRUE}
+
+  mod <- lm(daily_us_deaths ~ daily_g_deaths, data = total_combined)
+  summary(mod)
+  
+  total_combined %>% mutate(pred = predict(mod))
+  
+
+```
+
+Now to visualize over the year 2022, how US deaths actually occurred versus the prediction based on global deaths.
+
+```{r graph_of_model, echo = TRUE}
+
+total_combined %>%
+  mutate(pred = predict(mod)) %>%
+  filter(date >= "2022-01-01" & date <= "2022-12-31") %>%
+  ggplot() +
+  geom_line(aes(x = date, y = daily_us_deaths, color = "Actual")) +
+  geom_line(aes(x = date, y = pred, color = "Prediction")) +    
+  labs(title = "Number of Daily Deaths in the US in 2022",
+       x = "Date in 2022",
+       y = "# of Deaths",
+       color = "Actual vs. Model Prediction") 
+```
+
+# Conclusions
+
+Based on the linear model I created as well as the visualization, we can conclude that global deaths are a fairly good predictor of US deaths, particularly by 2022 when we had enough data historically. In the beginning of the year, there were more actual deaths than predicted, as it was most likely due to an unusual surge of deaths in the US. However, the actuals stabilized the with prediction after the first few months once that surge subsided. It seems as though at this point during the pandemic, the behavior of the virus and how it affects people seems to be very similar in the US and globally. The graph overlaying actual US death amounts and predicted death amounts show that the lines trend in very similar directions.
+
+## Note on Bias
+
+It is impossible at this point during the pandemic to not analyze data without having your own implicit or explicit opinions about the virus and how it has affected your life. I am someone who lives in the US and someone who has been affected with friends and family who have gotten the virus. Therefore, there may be some bias in trying to determine how the US numbers compare to the global numbers and hope that the US is doing well comparatively, as this is my home country. However, I tried my best to keep bias out of the report in terms of the variables I picked and the subset of data I chose to analyze. 
